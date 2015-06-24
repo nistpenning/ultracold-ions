@@ -33,6 +33,10 @@ class penning_trap_master:
     Contains methods to manage the Itano, Mode, and Dynamics codes all at once, and pass information between the three.
 
     """
+
+    fund_charge = 1.602176565e-19
+    ion_mass = 8.96 * 1.66053892e-27
+
     def __init__(self, writeto=None):
 
         if writeto is None:
@@ -87,8 +91,8 @@ class penning_trap_master:
         ptcls.ptclList[0] = x
         ptcls.ptclList[1] = y
         ptcls.ptclList[2:6, :n_ions] = 0
-        ptcls.ptclList[6, :n_ions] = fund_charge
-        ptcls.ptclList[7, :n_ions] = ion_mass
+        ptcls.ptclList[6, :n_ions] = self.fund_charge
+        ptcls.ptclList[7, :n_ions] = self.ion_mass
 
         self.ptcls = ptcls
 
