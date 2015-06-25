@@ -10,7 +10,6 @@ import sys
 import os
 
 
-
 sys.path.append(r'C:\Users\sbt\Desktop\calc\simulation\crystal_mode_code')
 sys.path.append(r'C:\Users\sbt\Desktop\calc\simulation\itano_cooling_code')
 
@@ -28,26 +27,41 @@ atomic_unit = 1.66053892e-27
 ion_mass = 8.96 * atomic_unit
 
 
+"""THINGS TO CHANGE/FIX"""
+# Make trap parameters between different codes consistent. ex: Nion vs n_ions
+
+
 class penning_trap_master:
     """
-    Contains methods to manage the Itano, Mode, and Dynamics codes all at once, and pass information between the three.
+    Contains methods to manage the Itano, Mode, and Dynamics codes all at once,
+    and pass information between the three.
 
     """
 
     fund_charge = 1.602176565e-19
     ion_mass = 8.96 * 1.66053892e-27
 
-    def __init__(self, writeto=None):
+    def __init__(self, n_ions=19, Vtrap=(0.0, -1750.0, -2000.0),
+                               B=4.4588, frot=180., Vwall=5.,
+                               writeto=None):
+        """Initialize Everything - pass all relevent trap parameters now"""                            
 
         if writeto is None:
             self.writeto = os.getcwd()
 
         self.itano = None
-        self.crystal = None
+        
+        # Setup Zero Temperature Crystal
+        self.crystal = mc.ModeAnalysis(N=n_ions, Vtrap=Vtrap, frot=frot, B=B,
+                                  Vwall=Vwall)      
+        self.crystal.run()
 
+        # Setup Simulation
+        self.setup_sim()
+        
         self.trap_config = None
         self.ptcls = None
-        self.n_ions = 0
+        self.n_ions = n_ions
         self.accelerations = None
 
         self.mode_code_loaded = False
@@ -68,33 +82,30 @@ class penning_trap_master:
 
         pass # make this do everything
 
-    def setup_crystal_and_trap(self, n_ions=19, Vtrap=(0.0, -1750.0, -2000.0), B=4.4588, frot=180., Vwall=5.):
-        crystal = mc.ModeAnalysis(N=n_ions, Vtrap=Vtrap, frot=frot, B=B, Vwall=Vwall)
-        crystal.run()
-        trap_config = TrapConfiguration.TrapConfiguration()
-        trap_config.Bz = B
-        trap_config.kz = 2 * crystal.V0
-        delta = -crystal.Cw
-        trap_config.kx = -(0.5 + delta) * trap_config.kz
-        trap_config.ky = -(0.5 - delta) * trap_config.kz
-        trap_config.omega = crystal.wrot
-
-        self.trap_config = trap_config
+    def setup_sim(self):
+        """Use trap parameters in self.crystal to setup simulation"""
+        self.trap_config = TrapConfiguration.TrapConfiguration()
+        self.trap_config.Bz = self.crystal.B
+        self.trap_config.kz = 2 * self.crystal.V0
+        self.delta = -self.crystal.Cw
+        self.trap_config.kx = -(0.5 + self.delta) * trap_config.kz
+        self.trap_config.ky = -(0.5 - self.delta) * trap_config.kz
+        self.trap_config.omega = self.crystal.wrot
+        self.trap_config.theta = 0
 
         # initialize particles
-        ptcls = Ptcls.Ptcls()
-        ptcls.set_nptcls(n_ions)
-        x = crystal.uE[:n_ions].astype(np.float32)
-        x = x.reshape(1, crystal.Nion)
-        y = crystal.uE[n_ions:].astype(np.float32)
-        y = y.reshape(1, crystal.Nion)
-        ptcls.ptclList[0] = x
-        ptcls.ptclList[1] = y
-        ptcls.ptclList[2:6, :n_ions] = 0
-        ptcls.ptclList[6, :n_ions] = self.fund_charge
-        ptcls.ptclList[7, :n_ions] = self.ion_mass
+        self.ptcls = Ptcls.Ptcls()
+        self.ptcls.set_nptcls(self.n_ions)
+        x = self.crystal.uE[:self.n_ions].astype(np.float32)
+        x = x.reshape(1, self.crystal.Nion)
+        y = self.crystal.uE[self.n_ions:].astype(np.float32)
+        y = y.reshape(1, self.crystal.Nion)
+        self.ptcls.ptclList[0] = x
+        self.ptcls.ptclList[1] = y
+        self.ptcls.ptclList[2:6, :self.n_ions] = 0
+        self.ptcls.ptclList[6, :self.n_ions] = self.crystal.q
+        self.ptcls.ptclList[7, :self.n_ions] = self.crystal.m
 
-        self.ptcls = ptcls
 
         self.update_loads()
 
@@ -141,6 +152,167 @@ class penning_trap_master:
 
     def set_output_folder(self,dir):
         self.writeto = dir
+
+    def unpickle_ptcls():
+        """Unpickle a ptcls object from a file"""
+        pass
+    
+    def unpickle_ptclslist(ind):
+        """Unpickle a np.array that is a subarray from the ptcls.ptclList 
+        given by indices = ind from a file and convert to a ptcls object"""
+        pass
+    
+    def convert_to_ptcls(ind):
+        """Convert a subarray of a ptcls.ptclList to a ptcls object"""
+        # Maybe this could be a method in the ptclsclass
+    
+
+    def load_all_data(self):
+        """Loop though all pickled data (either ptcls or ptclsList and convert
+        to list of ptcls objects for each time step."""
+        self.unpickle_ptcls(self.filelocation)
+        # OR
+        self.unpickle_ptclslist(self.filelocation)
+        # not sure how to distinguish
+        return data
+    
+    def fourierAnalysis():
+        """Load all data and compute power spectral densities"""
+        data = self.load_all_data()
+        
+        # not even close to ready
+        
+        # MATLAB PSD CODE
+#        InSteps = 1e2   # Inner steps in simulation
+#        OutSteps = 1e6  # Outer number of steps in simulation
+#        dt = 5e-10      # time step
+#        
+#        freq = np.arange(0, 0.5/(InSteps*dt), 1/(InSteps*dt*OutSteps))
+#        freq = (0:0.5/(InSteps*dt)/(params(5)/2):0.5/(InSteps*dt))
+#        freq = 1.0e-6*freq(1:end-1); % chop of last one, because of Matlab ranges...
+#        
+#        # Calculate PSD for Axial Motion
+#        spectra = abs(fft(zs)).^2;
+#        Zpsd = sum(spectra, 2);
+#        Zpsd = Zpsd(1:(length(Zpsd)/2))+Zpsd(end:-1:length(Zpsd)/2+1);
+#        
+#        # Calculate PSD for Planar Motion
+#        motion = us - repmat(us(1,:),params(5),1); % subtract off equilibrium positions
+#        spectra = abs(fft(motion)).^2;
+#        Ppsd = sum(spectra, 2);
+#        Ppsd = Ppsd(1:(length(Ppsd)/2))+Ppsd(end:-1:length(Ppsd)/2+1);
+        
+    def kinetic_energy():
+        """Calculate kinetic energy of all particles"""
+        pass
+    
+    def potential_energy():
+        """Calculate potential energy of all particles using ModeAnalysis?"""
+        pass
+        
+    def exciteMode(branch, mode):
+        """Excite a particular mode
+        
+        Branch = 0: Magnetron
+                 1: Axial
+                 2: Cyclotron
+        """
+        pass
+    
+
+    
+    def rotate(x, y, theta):
+        """Rotates coordinates by theta"""
+        xnew = x*np.cos(theta) - y*np.sin(theta)
+        ynew = x*np.sin(theta) + y*np.cos(theta)    
+        return xnew, ynew
+        
+    def spin_down(self, x, y, vx, vy):
+        """Find velocities in rotating frame (move to that frame)"""
+        radii = np.sqrt(x**2 + y**2)
+        velocities = self.trap_config.omega*radii
+        for i in range(x.size):
+            rot = np.hstack((-x[i], y[i]))
+            rot = rot/ny.linalg.norm(rot)
+            
+            # counter velocity to move to rotating frame
+            rot = -velocities[i]*rot;
+            vx[i] += rot[0]
+            vy[i] += rot[1]
+        return vx, vy  
+
+    def make_qqdot_dimensionless(self, qqdot):
+        """Take a vector of positions stacked on top of velocities and convert
+        to dimensionless quantities
+        
+        Assumes first half is positions and second half is velocities        
+        """
+        N = int(u.size/2)  # N is NOT necessarily n_ions for this function only
+        pos = qqot[0:N]
+        vel = qqdot[N:]
+        qqdot_dim = np.hstack((pos/self.crystal.l0, vel/self.crystal.v0))
+        return qqdot_dim
+        
+    def axial_norm_coords(self, ptcls):
+        """Project axial motion and velocities into normal coordinates of 
+        axial modes for a crystal snapshot"""
+        #STILL WORKING ON THIS - AK
+        z = self.ptcls.ptclList[2, :self.n_ions]
+        vz = self.ptcls.ptclList[5, :self.n_ions]
+        qqdot = np.hstack((z,vz))
+        qqdot = self.make_qqdot_dimensionless(qqdot)
+        self.crystal.axialEvals
+          
+        # not sure which one works better
+        #a_norm_coords = np.linalg.inv(self.crystal.axialEvects)*qqdot 
+        #a_norm_coords = qqdot/self.crystal.axialEvects
+        
+        
+    def planar_norm_coords(self, ptcls):
+        """Project planar motion (away from equilbirium) 
+        and velocities into normal coordinates of axial modes for a crystal snapshot"""
+        #STILL WORKING ON THIS - AK
+        x = self.ptcls.ptclList[0, :self.n_ions]
+        y = self.ptcls.ptclList[1, :self.n_ions]
+        vx = self.ptcls.ptclList[3, :self.n_ions]
+        vy = self.ptcls.ptclList[4, :self.n_ions]
+        
+        # Get velocties in rotation frame (this needs to happen first)
+        vx, vy = self.spin_down(x, y, vx, vy)
+        
+        # Rotate positions into rotating frame        
+        x, y  = self.rotate(x, y, -self.trap_config.theta)  # rotate crystal back
+        displacement = np.hstack((x,y)) - self.crystal.uE   # subtract off equilibrium positions  
+        
+
+        qqdot = np.hstack((x, y, vx, vy))
+        
+        qqdot = np.array([PlanarMotion[s, :], vrot[s,:])
+        # need to get these dimensions right so matrix product works
+        norm_coords_planar[i,:] = numpy.linalg.inv(aTrap.planarEvects)*qqdot 
+        N = int(u.size/2)
+        norm_coords = zeros(1,N);    
+    
+    def axial_mode_energy(self, ptcls)
+        """Takes a ptcls snapshot and converts to axial mode energy"""
+        #STILL WORKING ON THIS - AK
+        norm_coords = self.axial_norm_coords(ptcls)
+        
+        EnergyAxialMode = np.zeros(self.nions)
+        for i in range(self.n_ions):
+            EnergyAxialMode[i] = self.crystal.E0*(np.absolute(norm_coords[2*i])**2+
+                                                 np.absolute(norm_coords[2*i+1])**2)
+
+    def planar_mode_energy(self, ptcls)
+        """Takes a ptcls snapshot and converts to axial mode energy"""
+        
+        #STILL WORKING ON THIS - AK
+        norm_coords = self.planar_norm_coords(ptcls)
+        
+        EnergyPlanarMode = np.zeros(self.nions
+        for i in range(self.n_ions):
+            EnergyPlanarMode[i] = self.crystal.E0*(np.absolute(norm_coords_planar[2*i])**2+
+                                                 np.absolute(norm_coords_planar[2*i+1])**2)
 
 
 def main(argv=None):
