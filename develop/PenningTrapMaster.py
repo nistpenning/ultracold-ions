@@ -178,8 +178,11 @@ class penning_trap_master:
     
     def fourierAnalysis():
         """Load all data and compute power spectral densities"""
-        data = self.load_all_data()
+        data = self.load_all_data()  # list of ptcls? 
         
+        self.dt=5e-10
+        self.tmax=1e-6
+        self.num_dump=1000
         # not even close to ready
         
         # MATLAB PSD CODE
@@ -203,24 +206,53 @@ class penning_trap_master:
 #        Ppsd = Ppsd(1:(length(Ppsd)/2))+Ppsd(end:-1:length(Ppsd)/2+1);
         
     def kinetic_energy():
-        """Calculate kinetic energy of all particles"""
+        """Calculate total kinetic energy of all particles"""
+        # Note, this should be the full energy, not the linearized approximation
         pass
     
     def potential_energy():
-        """Calculate potential energy of all particles using ModeAnalysis?"""
+        """Calculate total potential energy of all particles using ModeAnalysis?"""
+        # Note, this should be the full energy, not the linearized approximation
         pass
         
-    def exciteMode(branch, mode):
+    def exciteMode(branch, mode, amp, phase):
         """Excite a particular mode
         
-        Branch = 0: Magnetron
-                 1: Axial
-                 2: Cyclotron
-        """
-        pass
-    
+        Branch = 0: Axial
+                 1: Planar
+                 
+        Mode = 1 to N (or 2N for planar)
+                (they are ordered by frequency ascending)
 
-    
+        amp -- amplitude of motion (think lambda^2*A^2)
+        phase -- phase angle of excitation (think, displace positions or velocities?)
+                However, I don't know what phase = 0, means to the eigensystem solver
+        
+        returns column vector with displacements stacked on velocities
+        """
+        # convert to python indexing
+        mode = mode - 1
+        
+        if branch == 0:  # axial branch
+            D = self.crystal.axialEvals[mode]
+            E1 = np.squeeze(self.crystal.axialEvects[:, 2*mode])
+            E1 = np.concatenate((E1[:self.n_ions], E1[self.n_ions:]/D))
+            E2 = np.squeeze(self.crystal.axialEvects[:, 2*mode+1])
+            E2 = np.concatenate((E2[:self.n_ions], E2[self.n_ions:]/D))
+
+        else:  # planar modes
+            D = self.crystal.planarEvals[mode]
+            E1 = np.squeeze(self.crystal.planarEvals[:, 2*mode])
+            E1 = np.concatenate((E1[:2*self.n_ions], E1[2*self.n_ions:]/D))
+            E2 = np.squeeze(self.crystal.planarEvals[:, 2*mode+1])
+            E2 = np.concatenate((E2[:2*self.n_ions], E2[2*self.n_ions:]/D))               
+
+        A1 = amp*np.exp(1j*(D + phase));
+        A2 = amp*np.exp(-1j*(D + phase));
+        
+        qqdot = A1*E1 + A2*E2
+        return qqdot
+
     def rotate(x, y, theta):
         """Rotates coordinates by theta"""
         xnew = x*np.cos(theta) - y*np.sin(theta)
@@ -256,63 +288,79 @@ class penning_trap_master:
     def axial_norm_coords(self, ptcls):
         """Project axial motion and velocities into normal coordinates of 
         axial modes for a crystal snapshot"""
-        #STILL WORKING ON THIS - AK
+        
         z = self.ptcls.ptclList[2, :self.n_ions]
         vz = self.ptcls.ptclList[5, :self.n_ions]
-        qqdot = np.hstack((z,vz))
+        qqdot = np.hstack((z, vz))
         qqdot = self.make_qqdot_dimensionless(qqdot)
-        self.crystal.axialEvals
-          
-        # not sure which one works better
-        #a_norm_coords = np.linalg.inv(self.crystal.axialEvects)*qqdot 
-        #a_norm_coords = qqdot/self.crystal.axialEvects
         
+        norm_coords = []
+        for mode in self.n_ions:
+            # assumes mode pairs are one after the other
+            E = np.squeeze(self.crystal.axialEvects[:, 2*mode])
+            D = self.crystal.axialEvals[mode]
+            E = np.concatenate((E[:self.n_ions], E[self.n_ions:]/D))
+            norm_coords.append(np.absolute(np.dot(qqdot,E)))
+
+        return np.array(norm_coords)
+         
+    def linearized_axial_energy(ptcls):
+        """Compute linearized axial energy"""
+        z = self.ptcls.ptclList[2, :self.n_ions]
+        vz = self.ptcls.ptclList[5, :self.n_ions]
+        qqdot = np.hstack((z, vz))
+        qqdot = self.make_qqdot_dimensionless(qqdot)
+        return np.sum(qqdot**2)
+        
+    def axial_mode_energy(self, ptcls)
+        """Takes a ptcls snapshot and converts to axial mode energy"""
+        norm_coords = self.axial_norm_coords(ptcls)
+        
+        EnergyAxialMode = np.zeros(self.nions)
+        for mode in range(self.n_ions):
+            D = self.crystal.axialEvals[mode]
+            EnergyAxialMode(mode) = self.crystal.E0*2*D**2*norm_coords(2*mode)**2
+        
+        return EnergyAxialMode
         
     def planar_norm_coords(self, ptcls):
         """Project planar motion (away from equilbirium) 
         and velocities into normal coordinates of axial modes for a crystal snapshot"""
-        #STILL WORKING ON THIS - AK
         x = self.ptcls.ptclList[0, :self.n_ions]
         y = self.ptcls.ptclList[1, :self.n_ions]
         vx = self.ptcls.ptclList[3, :self.n_ions]
         vy = self.ptcls.ptclList[4, :self.n_ions]
         
-        # Get velocties in rotation frame (this needs to happen first)
+        # Get velocties in rotating frame (this needs to happen first)
         vx, vy = self.spin_down(x, y, vx, vy)
         
         # Rotate positions into rotating frame        
         x, y  = self.rotate(x, y, -self.trap_config.theta)  # rotate crystal back
         displacement = np.hstack((x,y)) - self.crystal.uE   # subtract off equilibrium positions  
-        
+        qqdot = np.hstack((displacement, vx, vy))
+        qqdot = self.make_qqdot_dimensionless(qqdot)
 
-        qqdot = np.hstack((x, y, vx, vy))
-        
-        qqdot = np.array([PlanarMotion[s, :], vrot[s,:])
-        # need to get these dimensions right so matrix product works
-        norm_coords_planar[i,:] = numpy.linalg.inv(aTrap.planarEvects)*qqdot 
-        N = int(u.size/2)
-        norm_coords = zeros(1,N);    
-    
-    def axial_mode_energy(self, ptcls)
-        """Takes a ptcls snapshot and converts to axial mode energy"""
-        #STILL WORKING ON THIS - AK
-        norm_coords = self.axial_norm_coords(ptcls)
-        
-        EnergyAxialMode = np.zeros(self.nions)
-        for i in range(self.n_ions):
-            EnergyAxialMode[i] = self.crystal.E0*(np.absolute(norm_coords[2*i])**2+
-                                                 np.absolute(norm_coords[2*i+1])**2)
+        norm_coords = []
+        for mode in 2*self.n_ions:
+            # assumes mode pairs are one after the other
+            E = np.squeeze(self.crystal.axialEvects[:, 2*mode])
+            D = self.crystal.axialEvals[mode]
+            E = np.concatenate((E[:2*self.n_ions], E[2*self.n_ions:]/D))
+            norm_coords.append(np.absolute(np.dot(qqdot, E)))
+
+        return np.array(norm_coords)
 
     def planar_mode_energy(self, ptcls)
         """Takes a ptcls snapshot and converts to axial mode energy"""
-        
-        #STILL WORKING ON THIS - AK
         norm_coords = self.planar_norm_coords(ptcls)
-        
-        EnergyPlanarMode = np.zeros(self.nions
-        for i in range(self.n_ions):
-            EnergyPlanarMode[i] = self.crystal.E0*(np.absolute(norm_coords_planar[2*i])**2+
-                                                 np.absolute(norm_coords_planar[2*i+1])**2)
+
+        norm_coords = self.planar_norm_coords(ptcls)
+        EnergyPlanarMode = np.zeros(2*self.nions)
+        for mode in range(self.n_ions):
+            D = self.crystal.planarEvals[mode]
+            EnergyPlanarMode(mode) = self.crystal.E0*2*D**2*norm_coords(2*mode)**2
+
+        return EnergyPlanarMode
 
 
 def main(argv=None):
