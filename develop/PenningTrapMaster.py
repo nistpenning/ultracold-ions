@@ -178,17 +178,17 @@ class penning_trap_master:
 
     def exciteMode(self, branch, mode, amp, phase):
         """Excite a particular mode
-        
+
         Branch = 0: Axial
                  1: Planar
-                 
+
         Mode = 1 to N (or 2N for planar)
                 (they are ordered by frequency ascending)
 
         amp -- amplitude of motion (think lambda^2*A^2)
         phase -- phase angle of excitation (think, displace positions or velocities?)
                 However, I don't know what phase = 0, means to the eigensystem solver
-        
+
         returns column vector with displacements stacked on velocities
         """
         # convert to python indexing
@@ -231,8 +231,8 @@ class penning_trap_master:
     def make_qqdot_dimensionless(self, qqdot):
         """Take a vector of positions stacked on top of velocities and convert
         to dimensionless quantities
-        
-        Assumes first half is positions and second half is velocities        
+
+        Assumes first half is positions and second half is velocities
         """
         N = int(u.size / 2)  # N is NOT necessarily n_ions for this function only
         pos = qqdot[0:N]
@@ -241,7 +241,7 @@ class penning_trap_master:
         return qqdot_dim
 
     def axial_norm_coords(self, ptcls):
-        """Project axial motion and velocities into normal coordinates of 
+        """Project axial motion and velocities into normal coordinates of
         axial modes for a crystal snapshot"""
 
         z = self.ptcls.ptclList[2, :self.n_ions]
@@ -279,7 +279,7 @@ class penning_trap_master:
         return EnergyAxialMode
 
     def planar_norm_coords(self, ptcls):
-        """Project planar motion (away from equilbirium) 
+        """Project planar motion (away from equilbirium)
         and velocities into normal coordinates of axial modes for a crystal snapshot"""
         x = self.ptcls.ptclList[0, :self.n_ions]
         y = self.ptcls.ptclList[1, :self.n_ions]
@@ -289,7 +289,7 @@ class penning_trap_master:
         # Get velocties in rotating frame (this needs to happen first)
         vx, vy = self.spin_down(x, y, vx, vy)
 
-        # Rotate positions into rotating frame        
+        # Rotate positions into rotating frame
         x, y = self.rotate(x, y, -self.trap_config.theta)  # rotate crystal back
         displacement = np.hstack((x, y)) - self.crystal.uE  # subtract off equilibrium positions
         qqdot = np.hstack((displacement, vx, vy))
