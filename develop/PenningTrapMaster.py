@@ -6,10 +6,11 @@ import uci.TrapConfiguration as TrapConfiguration
 import numpy as np
 import pyopencl as cl
 import pyopencl.array as cl_array
-import sys
-import os
+import sys as sys
+import os as os
 from matplotlib import pyplot as plt
 from matplotlib import animation
+import uci.CoolingLaserAdvance as CoolingLaserAdvance
 
 sys.path.append(r'C:\Users\sbt\Desktop\calc\simulation\crystal_mode_code')
 sys.path.append(r'C:\Users\sbt\Desktop\calc\simulation\itano_cooling_code')
@@ -43,7 +44,14 @@ class penning_trap_master:
 
     def __init__(self, n_ions=19, Vtrap=(0.0, -1750.0, -2000.0),
                  B=4.4588, frot=180., Vwall=5.,
-                 writeto=None, spinup=True):
+                 perp_laser_on=False, perp_laser_offset=10.0E-6,
+                 perp_laser_detuning=-30.0E6,
+                 perp_laser_sat=.5, perp_laser_waist=30E-6,
+
+                 par_laser_on=False,
+                 par_laser_sat=.2,
+
+                 writeto=None, spinup=True,verbosity=0):
         """Initialize Everything - pass all relevent trap parameters now"""
 
         if writeto is None:
@@ -62,6 +70,15 @@ class penning_trap_master:
         self.n_ions = n_ions
         self.accelerations = None
         self.delta = None
+
+        self.perp_laser_on=perp_laser_on
+        self.perp_laser_offset=perp_laser_offset
+        self.perp_laser_detuning=perp_laser_detuning
+        self.perp_laser_sat=perp_laser_sat
+        self.perp_laser_waist=perp_laser_waist
+
+        self.par_laser_on=par_laser_on
+        self.par_laser_sat=par_laser_sat
 
         self.setup_sim(spinup)
 
@@ -134,6 +151,25 @@ class penning_trap_master:
 
         accelerations = [coulomb_acc, trap_acc]
 
+        if self.perp_laser_on is True:
+            perplaser = CoolingLaserAdvance.CoolingLaserAdvance(ctx, queue)
+            perplaser.sigma=self.perp_laser_waist/np.sqrt(2)
+            perplaser.k0 = np.array([2.0 * np.pi / 313.0e-9, 0, 0], dtype=np.float32)
+            perplaser.delta0 = self.perp_laser_detuning
+            perplaser.S = self.perp_laser_sat
+            perplaser.x0 = np.array([self.perp_laser_offset, 0, 0], dtype=np.float32)
+            accelerations.append(perplaser)
+
+        if self.par_laser_on is True:
+            parlaser = CoolingLaserAdvance.CoolingLaserAdvance(ctx, queue)
+            parlaser.sigma = None
+            parlaser.k0 = np.array([0, 0, -2.0 * np.pi / 313.0e-9], dtype=np.float32) #should this
+            # be negative or no???
+            parlaser.x0 = np.array([0, 0, 0], dtype=np.float32)
+            parlaser.S = self.par_laser_sat
+
+            accelerations.append(parlaser)
+
         updater = BendKickUpdater.BendKickUpdater(ctx, queue)
         updater.trapConfiguration = self.trap_config
         xd = cl_array.to_device(queue, self.ptcls.x())
@@ -157,7 +193,13 @@ class penning_trap_master:
             xd.get(queue, self.ptcls.x())
             yd.get(queue, self.ptcls.y())
             zd.get(queue, self.ptcls.z())
-            print(self.ptcls.x())
+            #print(self.ptcls.x())
+            #print(self.axial_mode_energy(self.ptcls)+self.planar_mode_energy(self.ptcls))
+            print("ke",penning_trap_analyze.kinetic_energy(self.ptcls))
+            print("pe",penning_trap_analyze.potential_energy(self.ptcls,self.crystal))
+            print("sum;",penning_trap_analyze.kinetic_energy(self.ptcls)+
+                  penning_trap_analyze.potential_energy(self.ptcls,self.crystal))
+            print("-")
             vxd.get(queue, self.ptcls.vx())
             vyd.get(queue, self.ptcls.vy())
             vzd.get(queue, self.ptcls.vz())
@@ -234,7 +276,7 @@ class penning_trap_master:
 
         Assumes first half is positions and second half is velocities
         """
-        N = int(u.size / 2)  # N is NOT necessarily n_ions for this function only
+        N = int(self.crystal.u.size / 2)  # N is NOT necessarily n_ions for this function only
         pos = qqdot[0:N]
         vel = qqdot[N:]
         qqdot_dim = np.hstack((pos / self.crystal.l0, vel / self.crystal.v0))
@@ -250,7 +292,7 @@ class penning_trap_master:
         qqdot = self.make_qqdot_dimensionless(qqdot)
 
         norm_coords = []
-        for mode in self.n_ions:
+        for mode in range(self.n_ions):
             # assumes mode pairs are one after the other
             E = np.squeeze(self.crystal.axialEvects[:, 2 * mode])
             D = self.crystal.axialEvals[mode]
@@ -269,34 +311,35 @@ class penning_trap_master:
 
     def axial_mode_energy(self, ptcls):
         """Takes a ptcls snapshot and converts to axial mode energy"""
-        norm_coords = self.axial_norm_coords(self.ptcls)
+        norm_coords = self.axial_norm_coords(ptcls)
 
-        EnergyAxialMode = np.zeros(self.nions)
+        EnergyAxialMode = np.zeros(self.n_ions)
         for mode in range(self.n_ions):
+            print(self.n_ions,mode,list(range(self.n_ions)))
             D = self.crystal.axialEvals[mode]
-            EnergyAxialMode[mode] = self.crystal.E0 * 2 * D ** 2 * norm_coords[2 * mode] ** 2
+            EnergyAxialMode[mode] = self.crystal.E0 * 2 * D ** 2 * norm_coords[2* mode] ** 2
 
         return EnergyAxialMode
 
     def planar_norm_coords(self, ptcls):
         """Project planar motion (away from equilbirium)
         and velocities into normal coordinates of axial modes for a crystal snapshot"""
-        x = self.ptcls.ptclList[0, :self.n_ions]
-        y = self.ptcls.ptclList[1, :self.n_ions]
-        vx = self.ptcls.ptclList[3, :self.n_ions]
-        vy = self.ptcls.ptclList[4, :self.n_ions]
+        x = ptcls.ptclList[0, :self.n_ions]
+        y = ptcls.ptclList[1, :self.n_ions]
+        vx = ptcls.ptclList[3, :self.n_ions]
+        vy = ptcls.ptclList[4, :self.n_ions]
 
         # Get velocties in rotating frame (this needs to happen first)
         vx, vy = self.spin_down(x, y, vx, vy)
 
         # Rotate positions into rotating frame
-        x, y = self.rotate(x, y, -self.trap_config.theta)  # rotate crystal back
+        x, y = self.rotate(x=x, y=y, theta=-self.trap_config.theta)  # rotate crystal back
         displacement = np.hstack((x, y)) - self.crystal.uE  # subtract off equilibrium positions
         qqdot = np.hstack((displacement, vx, vy))
         qqdot = self.make_qqdot_dimensionless(qqdot)
 
         norm_coords = []
-        for mode in 2 * self.n_ions:
+        for mode in range(2 * self.n_ions):
             # assumes mode pairs are one after the other
             E = np.squeeze(self.crystal.axialEvects[:, 2 * mode])
             D = self.crystal.axialEvals[mode]
@@ -308,9 +351,7 @@ class penning_trap_master:
     def planar_mode_energy(self, ptcls):
         """Takes a ptcls snapshot and converts to axial mode energy"""
         norm_coords = self.planar_norm_coords(ptcls)
-
-        norm_coords = self.planar_norm_coords(ptcls)
-        EnergyPlanarMode = np.zeros(2 * self.nions)
+        EnergyPlanarMode = np.zeros(2 * self.n_ions)
         for mode in range(self.n_ions):
             D = self.crystal.planarEvals[mode]
             EnergyPlanarMode[mode] = self.crystal.E0 * 2 * D ** 2 * norm_coords[2 * mode] ** 2
@@ -318,16 +359,41 @@ class penning_trap_master:
         return EnergyPlanarMode
 
     @staticmethod
-    def rotate(x, y, theta):
-        """Rotates coordinates by theta"""
-        xnew = x * np.cos(theta) - y * np.sin(theta)
-        ynew = x * np.sin(theta) + y * np.cos(theta)
-        return xnew, ynew
+    def rotate(ptcls=None, x=None, y=None, theta=0):
+        """Rotates coordinates by theta
+        Is agnostic to ptcls objects or x,y, arrays! Just insert one or the other
+        (but not both)
+        to rotate them by a definable argument theta CLOCKWISE.
+        :param ptcls:
+
+        """
+
+        if ptcls is None and x is None:
+            print("An incorrect argument was passed to this."
+                  "Please try again with either a ptcls object, or an x,y set of coordinates.")
+            return False
+        if ptcls is not None and x is not None and y is not None:
+            print("You have passed two different kinds of argument to this method."
+                  "Please try again with either just a particles object, or arrays for x or y"
+                  "coordinates.")
+            return False
+        if ptcls is None:
+            xnew = x * np.cos(theta) - y * np.sin(theta)
+            ynew = x * np.sin(theta) + y * np.cos(theta)
+            return xnew, ynew
+        if ptcls is not None:
+            xnew = ptcls[0] * np.cos(theta) - ptcls[1] * np.sin(theta)
+            ynew = ptcls[0] * np.sin(theta) + ptcls[1] * np.cos(theta)
+            ptcls[0] = xnew
+            ptcls[1] = ynew
+            return ptcls
 
 
-class penning_trap_analyze():
-    def __init__(self):
+class penning_trap_analyze:
+    def __init__(self, writeto=os.getcwd(), readfrom=os.getcwd()):
 
+        self.writeto = writeto
+        self.readfrom = readfrom
         pass
 
     @staticmethod
@@ -387,18 +453,48 @@ class penning_trap_analyze():
         #        Ppsd = sum(spectra, 2);
         #        Ppsd = Ppsd(1:(length(Ppsd)/2))+Ppsd(end:-1:length(Ppsd)/2+1);
 
-    def kinetic_energy(self):
+    @staticmethod
+    def kinetic_energy(ptcls):
         """Calculate total kinetic energy of all particles"""
         # Note, this should be the full energy, not the linearized approximation
-        pass
+        xvel = ptcls.ptclList[3]
+        yvel = ptcls.ptclList[4]
+        zvel = ptcls.ptclList[5]
+        masses = ptcls.ptclList[7]
+        T = .5 * np.sum(masses * (xvel ** 2 + yvel ** 2 + zvel ** 2))
 
-    def potential_energy(self):
+        return T
+
+    @staticmethod
+    def potential_energy(ptcls, crystal):
         """Calculate total potential energy of all particles using ModeAnalysis?"""
         # Note, this should be the full energy, not the linearized approximation
-        pass
+        x = ptcls.ptclList[0]
+        y = ptcls.ptclList[1]
+        z = ptcls.ptclList[2]
 
-    def make_movie(self,
-                   dt=5e-10, tmax=1e-6, num_dump=500, zcolor=False):
+        q = ptcls.ptclList[6]
+        m = ptcls.ptclList[7]
+        dx = x.reshape((x.size, 1)) - x
+        dy = y.reshape((y.size, 1)) - y
+        rsep = np.sqrt(dx ** 2 + dy ** 2)
+
+        with np.errstate(divide='ignore'):
+            Vc = np.where(rsep != 0., 1 / rsep, 0)
+
+        U = 0.5 * (-m[0] * crystal.wr ** 2 - q[0] * crystal.Coeff[2] + q[0] * crystal.B *
+                   crystal.wr) * \
+            np.sum((x ** 2 + y ** 2)) \
+            + np.sum(crystal.Cw2 * (x ** 2 - y ** 2)) \
+            + np.sum(crystal.Cw3 * (x ** 3 - 3 * x * y ** 2)) \
+            + 0.5 * crystal.k_e * q[0] ** 2 * np.sum(Vc) \
+            + .5 * np.sum(z ** 2 * crystal.wz)
+
+
+        return U
+
+    @staticmethod
+    def make_movie(dt=5e-10, tmax=1e-6, num_dump=500, zcolor=False):
         """
         Super experimental! Not sure how this will work out, but let's see anyway!
         """
@@ -412,7 +508,7 @@ class penning_trap_analyze():
         # I'm still unfamiliar with the following line of code:
         if zcolor is True:
             cm = plt.get_cmap('seismic')
-            #line, = ax.plot([], [], 'o', ms=10, c=[], cmap=cm)
+            # line, = ax.plot([], [], 'o', ms=10, c=[], cmap=cm)
             line, = ax.plot([], [], 'o', ms=10, c=cm)
         if zcolor is False:
             line, = ax.plot([], [], 'o', ms=10, color='DeepSkyBlue')
@@ -440,13 +536,11 @@ class penning_trap_analyze():
                 line.set_data(xdata, ydata)
                 if min(zdata) < 0:
                     zdata += min(zdata)
-                zdata/=max(zdata)
+                zdata /= max(zdata)
                 zcolors = cm(zdata)
                 print(zcolors)
 
                 line.set_c(zcolors)
-
-
 
             uniqueanimationcounter += 1
             print("numframes:", numframes, "counter:", uniqueanimationcounter)
@@ -462,9 +556,10 @@ class penning_trap_analyze():
 
 def main(argv=None):
     try:
-        # a = penning_trap_master()
-        # a.setup_sim()
-        # a.run_dynamics_simulation(tmax=8E-6,num_dump=50)
+
+        a = penning_trap_master(perp_laser_on=True, perp_laser_sat=2)
+        a.setup_sim()
+        a.run_dynamics_simulation(tmax=8E-6,num_dump=100)
         b = penning_trap_analyze()
         b.make_movie(tmax=8E-6, num_dump=100, zcolor=False)
 
