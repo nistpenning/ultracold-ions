@@ -51,7 +51,7 @@ class penning_trap_master:
                  par_laser_on=False,
                  par_laser_sat=.2,
 
-                 writeto=None, spinup=True,verbosity=0):
+                 writeto=None, spinup=True, verbosity=0):
         """Initialize Everything - pass all relevent trap parameters now"""
 
         if writeto is None:
@@ -70,15 +70,16 @@ class penning_trap_master:
         self.n_ions = n_ions
         self.accelerations = None
         self.delta = None
+        self.verbosity = verbosity
 
-        self.perp_laser_on=perp_laser_on
-        self.perp_laser_offset=perp_laser_offset
-        self.perp_laser_detuning=perp_laser_detuning
-        self.perp_laser_sat=perp_laser_sat
-        self.perp_laser_waist=perp_laser_waist
+        self.perp_laser_on = perp_laser_on
+        self.perp_laser_offset = perp_laser_offset
+        self.perp_laser_detuning = perp_laser_detuning
+        self.perp_laser_sat = perp_laser_sat
+        self.perp_laser_waist = perp_laser_waist
 
-        self.par_laser_on=par_laser_on
-        self.par_laser_sat=par_laser_sat
+        self.par_laser_on = par_laser_on
+        self.par_laser_sat = par_laser_sat
 
         self.setup_sim(spinup)
 
@@ -141,6 +142,9 @@ class penning_trap_master:
                 self.ptcls.vy()[i] = v[1] + self.ptcls.vy()[i]
 
     def run_dynamics_simulation(self, dt=5e-10, tmax=1e-6, num_dump=1000):
+        self.tmax = tmax
+        self.dt = dt
+        self.num_dump = num_dump
 
         ctx = cl.create_some_context(interactive=True)
         queue = cl.CommandQueue(ctx)
@@ -153,9 +157,9 @@ class penning_trap_master:
 
         if self.perp_laser_on is True:
             perplaser = CoolingLaserAdvance.CoolingLaserAdvance(ctx, queue)
-            perplaser.sigma=self.perp_laser_waist/np.sqrt(2)
+            perplaser.sigma = self.perp_laser_waist / np.sqrt(2)
             perplaser.k0 = np.array([2.0 * np.pi / 313.0e-9, 0, 0], dtype=np.float32)
-            perplaser.delta0 = self.perp_laser_detuning
+            perplaser.delta0 = 2 * np.pi * self.perp_laser_detuning
             perplaser.S = self.perp_laser_sat
             perplaser.x0 = np.array([self.perp_laser_offset, 0, 0], dtype=np.float32)
             accelerations.append(perplaser)
@@ -163,7 +167,7 @@ class penning_trap_master:
         if self.par_laser_on is True:
             parlaser = CoolingLaserAdvance.CoolingLaserAdvance(ctx, queue)
             parlaser.sigma = None
-            parlaser.k0 = np.array([0, 0, -2.0 * np.pi / 313.0e-9], dtype=np.float32) #should this
+            parlaser.k0 = np.array([0, 0, -2.0 * np.pi / 313.0e-9], dtype=np.float32)  # should this
             # be negative or no???
             parlaser.x0 = np.array([0, 0, 0], dtype=np.float32)
             parlaser.S = self.par_laser_sat
@@ -183,8 +187,21 @@ class penning_trap_master:
 
         t = 0.0
         i = 0
-        np.save('ptclsz' + str(i) + '.npy', self.ptcls.ptclList[0:3, :])
+        #np.save('ptclsz' + str(i) + '.npy', self.ptcls.ptclList[0:3, :])
 
+        axialmodeEtray = []
+        timetray = []
+        axialstandardEtray = []
+        planarmodeEtray = []
+        planarstandardEtray = []
+        axialkineticEtray = []
+        planarkineticEtray = []
+        currt=0
+
+        nt = int(np.ceil(tmax/dt/num_dump))
+        self.pp = np.zeros((3, self.n_ions, nt))
+        ni = 0
+        print("The ceiling size is:", tmax/(dt*num_dump))
         while t < tmax:
             t = updater.update(
                 xd, yd, zd, vxd, vyd, vzd, qd, md, accelerations, t, dt,
@@ -193,27 +210,88 @@ class penning_trap_master:
             xd.get(queue, self.ptcls.x())
             yd.get(queue, self.ptcls.y())
             zd.get(queue, self.ptcls.z())
-            #print(self.ptcls.x())
-            print('Axial mode E alone',np.sum(self.axial_mode_energy(self.ptcls)))
-            print("Axial regular E alone:", (np.sum(self.ptcls.vz()**2)/self.crystal.v0**2 +
-                  np.sum(self.ptcls.z())**2/self.crystal.l0**2) *self.crystal.E0)
-            print("Total mode E:",np.sum(self.axial_mode_energy(self.ptcls))+np.sum(
-                self.planar_mode_energy(self.ptcls)))
-            print("ke",penning_trap_analyze.kinetic_energy(self.ptcls,
-                                                           rot_frame=True,
-                                                           omega=self.trap_config.omega))
-            print("pe",penning_trap_analyze.potential_energy(self.ptcls,self.crystal,rot_frame=True,
-                                                             theta=self.trap_config.theta))
-            print("sum;",penning_trap_analyze.kinetic_energy(self.ptcls,rot_frame=True,
-                                                             omega=self.trap_config.omega)+
-                  penning_trap_analyze.potential_energy(self.ptcls,self.crystal,rot_frame=True,
-                                                             theta=self.trap_config.theta))
-            print("-")
             vxd.get(queue, self.ptcls.vx())
             vyd.get(queue, self.ptcls.vy())
             vzd.get(queue, self.ptcls.vz())
+            self.pp[0,:,ni] = self.ptcls.x()
+            self.pp[1,:,ni] = self.ptcls.y()
+            self.pp[2,:,ni] = self.ptcls.z()
+
+            currt+=1
+            if t > tmax * 0:
+                timetray.append(t)
+                planarmodeEtray.append(np.sum(
+                    self.planar_mode_energy(self.ptcls)))
+
+                planarkineticEtray.append(penning_trap_analyze.kinetic_energy(self.ptcls,
+                                                                              rot_frame=True,
+                                                                              omega=self.trap_config.omega))
+
+                planarstandardEtray.append(
+                    penning_trap_analyze.kinetic_energy(self.ptcls, rot_frame=True,
+                                                        omega=self.trap_config.omega) +
+                    penning_trap_analyze.potential_energy(self.ptcls, self.crystal,
+                                                          rot_frame=True,
+                                                          theta=self.trap_config.theta))
+
+                axialmodeEtray.append(np.sum(self.axial_mode_energy(self.ptcls)))
+                axialstandardEtray.append(
+                    np.sum((np.sum(self.ptcls.vz() ** 2) / self.crystal.v0 ** 2 +
+                            np.sum(self.ptcls.z()) ** 2 / self.crystal.l0 ** 2) * self.crystal.E0))
+                axialkineticEtray.append(np.sum(self.ptcls.vz() ** 2) / self.crystal.v0 ** 2
+                                         * self.crystal.E0)
+            if self.verbosity >= 1:
+                print("Time:", t)
+
+            if self.verbosity >= 2:
+                print('Axial mode E alone', np.sum(self.axial_mode_energy(self.ptcls)))
+
+                print("Axial regular E alone:",
+                      (np.sum(self.ptcls.vz() ** 2) / self.crystal.v0 ** 2 +
+                       np.sum(self.ptcls.z()) ** 2 / self.crystal.l0 ** 2) * self.crystal.E0)
+                print("Total mode E:", np.sum(self.axial_mode_energy(self.ptcls)) + np.sum(
+                    self.planar_mode_energy(self.ptcls)))
+                print("ke", penning_trap_analyze.kinetic_energy(self.ptcls,
+                                                                rot_frame=True,
+                                                                omega=self.trap_config.omega))
+                print("pe", penning_trap_analyze.potential_energy(self.ptcls, self.crystal,
+                                                                  rot_frame=True,
+                                                                  theta=self.trap_config.theta))
+                print("sum;", penning_trap_analyze.kinetic_energy(self.ptcls, rot_frame=True,
+                                                                  omega=self.trap_config.omega) +
+                      penning_trap_analyze.potential_energy(self.ptcls, self.crystal,
+                                                            rot_frame=True,
+                                                            theta=self.trap_config.theta))
+
+            if self.verbosity > 0:
+                print("-")
+
             i += 1
             np.save('ptclsz' + str(i) + '.npy', self.ptcls.ptclList[0:3, :])
+            ni = ni + 1
+        #plt.figure()
+
+        print(planarmodeEtray)
+
+        #plt.plot(timetray, planarmodeEtray, label="Planar Mode-Computed E", linewidth=10)
+        # plt.plot(timetray,[np.mean(planarmodeEtray)]*len(timetray),label="Planar Mode E Mean")
+        # plt.plot(timetray,planarstandardEtray,label="Planar Standard Total Energy (T+U)")
+        # plt.plot(timetray,[np.mean(planarstandardEtray)]*len(timetray),label="Standard E Mean")
+        #plt.plot(timetray, planarkineticEtray, label="Planar Kinetic Total Energy (T)")
+        # plt.plot(timetray,[np.mean(planarkineticEtray)]*len(timetray),label="Kinetic E Mean")
+        #print(particlespositions)
+        #plt.scatter(particlespositions[0][:][5],particlespositions[1][:][5])
+        """
+        plt.plot(timetray,axialmodeEtray,label="Axial Mode-Computed E")
+        plt.plot(timetray,[np.mean(axialmodeEtray)]*len(timetray),label="Axial Mode E Mean")
+        plt.plot(timetray,axialstandardEtray,label="Standard Total Energy (T+U)")
+        plt.plot(timetray,[np.mean(axialstandardEtray)]*len(timetray),label="Standard E Mean")
+        plt.plot(timetray,[np.mean(axialkineticEtray)]*len(timetray), label="Kinetic E Mean")
+        plt.plot(timetray,axialkineticEtray,label="Kinetic E")
+        """
+
+        plt.legend()
+        #plt.show()
 
     def setup_itano(self, defaultoff=30.0E-6, defaultdet=-500E6, wr=2 * np.pi * 45.0E3,
                     Tguess=1E-3, saturation=.5, dens=2.77E9, ywidth=2.0E-6, radius=225.0E-6,
@@ -271,7 +349,7 @@ class penning_trap_master:
         radii = np.sqrt(x ** 2 + y ** 2)
         velocities = omega * radii
         for i in range(x.size):
-            rot = np.hstack((-x[i], y[i]))
+            rot = np.hstack((-y[i], x[i]))
             rot = rot / np.linalg.norm(rot)
 
             # counter velocity to move to rotating frame
@@ -350,7 +428,7 @@ class penning_trap_master:
         norm_coords = []
         for mode in range(2 * self.n_ions):
             # assumes mode pairs are one after the other
-            #print(self.crystal.axialEvects.shape)
+            # print(self.crystal.axialEvects.shape)
             E = np.squeeze(self.crystal.planarEvects[:, 2 * mode])
             D = self.crystal.planarEvals[mode]
             E = np.concatenate((E[:2 * self.n_ions], E[2 * self.n_ions:] / D))
@@ -362,7 +440,7 @@ class penning_trap_master:
         """Takes a ptcls snapshot and converts to axial mode energy"""
         norm_coords = self.planar_norm_coords(ptcls)
         EnergyPlanarMode = np.zeros(2 * self.n_ions)
-        for mode in range(2*self.n_ions):
+        for mode in range(2 * self.n_ions):
             D = self.crystal.planarEvals[mode]
             EnergyPlanarMode[mode] = self.crystal.E0 * 2 * D ** 2 * norm_coords[mode] ** 2
         return EnergyPlanarMode
@@ -463,14 +541,15 @@ class penning_trap_analyze:
         #        Ppsd = Ppsd(1:(length(Ppsd)/2))+Ppsd(end:-1:length(Ppsd)/2+1);
 
     @staticmethod
-    def kinetic_energy(ptcls, rot_frame=True,omega=None):
+    def kinetic_energy(ptcls, rot_frame=True, omega=None, verbosity=0):
         """Calculate total kinetic energy of all particles"""
         # Note, this should be the full energy, not the linearized approximation
-        if rot_frame is True:
+        if rot_frame is False:
             xvel = ptcls.ptclList[3]
             yvel = ptcls.ptclList[4]
             zvel = ptcls.ptclList[5]
             masses = ptcls.ptclList[7]
+            print(.5 * masses * ((xvel ** 2 + yvel ** 2 + zvel ** 2)))
             T = .5 * np.sum(masses * (xvel ** 2 + yvel ** 2 + zvel ** 2))
 
         else:
@@ -482,26 +561,27 @@ class penning_trap_analyze:
             masses = ptcls.ptclList[7]
 
             # Get velocties in rotating frame (this needs to happen first)
-            vx, vy = penning_trap_master.spin_down(omega,x, y, vx, vy)
+            vx, vy = penning_trap_master.spin_down(omega, x, y, vx, vy)
 
             T = .5 * np.sum(masses * (vx ** 2 + vy ** 2 + zvel ** 2))
 
+        if verbosity >= 5:
+            print("Kinetic energy sum computed:", T)
+
         return T
 
-
-
     @staticmethod
-    def potential_energy(ptcls, crystal,rot_frame=True, theta=None):
+    def potential_energy(ptcls, crystal, rot_frame=True, theta=None):
         """Calculate total potential energy of all particles using ModeAnalysis?"""
         # Note, this should be the full energy, not the linearized approximation
-        x = ptcls.ptclList[0]/crystal.l0
-        y = ptcls.ptclList[1]/crystal.l0
-        z = ptcls.ptclList[2]/crystal.l0
+        x = ptcls.ptclList[0] / crystal.l0
+        y = ptcls.ptclList[1] / crystal.l0
+        z = ptcls.ptclList[2] / crystal.l0
         if rot_frame is True:
             x, y = penning_trap_master.rotate(x=x, y=y, theta=-theta)
-              # rotate crystal back
+            # rotate crystal back
         q = ptcls.ptclList[6]
-        m = ptcls.ptclList[7]/crystal.m_Be
+        m = ptcls.ptclList[7] / crystal.m_Be
         """
         dx = x.reshape((x.size, 1)) - x
         dy = y.reshape((y.size, 1)) - y
@@ -519,10 +599,10 @@ class penning_trap_analyze:
             + 0.5 * crystal.k_e * q[0] ** 2 * np.sum(Vc) \
             + .5 * m[0]*np.sum(z ** 2 * crystal.wz**2)
         """
-        U=crystal.pot_energy(np.hstack((x,y)))
-        U+=np.sum(m*z**2)
+        U = crystal.pot_energy(np.hstack((x, y)))
+        U += np.sum(m * z ** 2)
 
-        return U*crystal.E0
+        return U * crystal.E0
 
     @staticmethod
     def make_movie(dt=5e-10, tmax=1e-6, num_dump=500, zcolor=False):
@@ -584,22 +664,30 @@ class penning_trap_analyze:
         # plt.show()
         ani.save('frankenstein.mp4', fps=20, writer='ffmpeg', extra_args=['-vcodec', 'libx264'])
 
-
-def main(argv=None):
-    try:
-
-        a = penning_trap_master(perp_laser_on=False, perp_laser_sat=2,par_laser_on=True)
-        a.setup_sim()
-        a.run_dynamics_simulation(tmax=8E-6,dt=5.0E-10,num_dump=100)
-        print(a.crystal.p0*a.crystal.E0)
-        b = penning_trap_analyze()
-        #b.make_movie(tmax=8E-6, dt=5.0E-10,num_dump=100, zcolor=False)
-
-    except UsageError as err:
-        print(sys.stderr, err.msg)
-        print(sys.stderr, 'For help use --help')
-        return 2
-
-
 if __name__ == '__main__':
-    sys.exit(main())
+#     sys.exit(main())
+# def main(argv=None):
+#     try:
+    a = penning_trap_master(perp_laser_on=True,
+                            perp_laser_waist=60E-6,
+                            perp_laser_sat=.5,
+                            perp_laser_offset=0E-6,
+                            perp_laser_detuning=-120E6,
+                            par_laser_on=True,
+                            verbosity=1, par_laser_sat=.2)
+
+
+    a.setup_sim()
+    a.run_dynamics_simulation(tmax=20E-6, dt=5.0E-10, num_dump=50)
+    print(a.crystal.uE)
+    print(a.crystal.p0*a.crystal.E0)
+    #         #b = penning_trap_analyze()
+    #         #b.make_movie(tmax=1E-6, dt=5.0E-10, num_dump=200, zcolor=False)
+    #
+#     except UsageError as err:
+#         print(sys.stderr, err.msg)
+#         print(sys.stderr, 'For help use --help')
+#         return 2
+#
+#
+

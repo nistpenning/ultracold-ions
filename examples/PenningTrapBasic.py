@@ -1,4 +1,4 @@
-import uci.BorisUpdater as BorisUpdater
+import uci.BendKickUpdater as BendKickUpdater
 import uci.CoulombAcc as CoulombAcc
 import uci.Ptcls as Ptcls
 import uci.TrapAcc as TrapAcc
@@ -52,7 +52,7 @@ def run_simulation(n_ions=19, Vtrap=(0.0, -1750.0, -2000.0), B=4.4588, frot=180.
     trap_acc.trapConfiguration = trap_config
     accelerations.append(trap_acc)
 
-    updater = BorisUpdater.BorisUpdater(ctx, queue)
+    updater = BendKickUpdater.BendKickUpdater(ctx, queue)
 
     xd = cl_array.to_device(queue, ptcls.x())
     yd = cl_array.to_device(queue, ptcls.y())
